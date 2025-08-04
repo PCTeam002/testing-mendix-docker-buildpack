@@ -1,28 +1,56 @@
 pipeline {
     agent any
+
     environment {
-        DOCKER_IMAGE = 'pyndhotaraya/hello-mendix:latest'
+        ADMIN_PASSWORD = 'mendix123'
+        DATABASE_ENDPOINT = 'postgres://mendix:mendix@dbhost:5432/mendix'
+        IMAGE_NAME = 'pyndhotaraya/mendix-app'
+        TAG = 'v1.0'
     }
+
     stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'master', url: 'https://github.com/PCTeam002/testing-mendix-docker-buildpack.git'
+            }
+        }
+
+        stage('Compile MDA') {
+            steps {
+                sh '''
+                python3 build.py --source ./src/app.mpk --destination ./build build-mda-dir
+                '''
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
-                script {
-                    sh 'docker build -t $DOCKER_IMAGE ./deployment'
-                }
+                sh '''
+                docker build --build-arg ROOTFS_IMAGE=mendix-rootfs:app \
+                             --build-arg BUILDER_ROOTFS_IMAGE=mendix-rootfs:builder \
+                             -t $IMAGE_NAME:$TAG ./build
+                '''
             }
         }
-        stage('Push to DockerHub') {
+
+        stage('Push to Registry') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-login',
-                    usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                    sh 'docker push $DOCKER_IMAGE'
-                }
+                sh '''
+                docker login -u $DOCKER_USER -p $DOCKER_PASS
+                docker push $IMAGE_NAME:$TAG
+                '''
             }
         }
-        stage('Deploy to Kubernetes') {
+
+        stage('Deploy & Run') {
             steps {
-                sh 'kubectl apply -f deployment/kubernetes/deployment.yaml'
+                sh '''
+                docker run -d --name mendix-app \
+                  -p 9000:80 \
+                  -e ADMIN_PASSWORD=$ADMIN_PASSWORD \
+                  -e DATABASE_ENDPOINT=$DATABASE_ENDPOINT \
+                  $IMAGE_NAME:$TAG
+                '''
             }
         }
     }
